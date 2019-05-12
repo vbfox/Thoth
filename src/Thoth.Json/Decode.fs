@@ -140,6 +140,10 @@ module Decode =
     // Primitives ///
     ////////////////
 
+    let private stringUnsafe : Decoder<string> =
+        fun _path value ->
+            Ok(Helpers.asString value)
+
     let string : Decoder<string> =
         fun path value ->
             if Helpers.isString value then
@@ -358,17 +362,21 @@ module Decode =
     let list (decoder : Decoder<'value>) : Decoder<'value list> =
         fun path value ->
             if Helpers.isArray value then
-                let mutable i = -1
                 let tokens = Helpers.asArray value
-                (Ok [], tokens) ||> Array.fold (fun acc value ->
-                    i <- i + 1
-                    match acc with
-                    | Error _ -> acc
-                    | Ok acc ->
-                        match decoder (path + ".[" + (i.ToString()) + "]") value with
-                        | Error er -> Error er
-                        | Ok value -> Ok (value::acc))
-                |> Result.map List.rev
+                let mutable i = tokens.Length - 1
+                let mutable result = []
+                let mutable error: DecoderError option = None
+                while i > 0 && error.IsNone do
+                    let value = tokens.[i]
+                    match decoder (path + ".[" + (i.ToString()) + "]") value with
+                    | Ok value -> result <- value::result
+                    | Error er -> error <- Some er
+                    i <- i - 1
+
+                if error.IsNone then
+                    Ok result
+                else
+                    Error error.Value
             else
                 (path, BadPrimitive ("a list", value))
                 |> Error
@@ -376,17 +384,21 @@ module Decode =
     let array (decoder : Decoder<'value>) : Decoder<'value array> =
         fun path value ->
             if Helpers.isArray value then
-                let mutable i = -1
+                let mutable i = 0
                 let tokens = Helpers.asArray value
-                let arr = Array.zeroCreate tokens.Length
-                (Ok arr, tokens) ||> Array.fold (fun acc value ->
+                let arr = ResizeArray<'value>()
+                let mutable error: DecoderError option = None
+                while i < tokens.Length && error.IsNone do
+                    let value = tokens.[i]
+                    match decoder (path + ".[" + (i.ToString()) + "]") value with
+                    | Ok value -> arr.Add(value)
+                    | Error er -> error <- Some er
                     i <- i + 1
-                    match acc with
-                    | Error _ -> acc
-                    | Ok acc ->
-                        match decoder (path + ".[" + (i.ToString()) + "]") value with
-                        | Error er -> Error er
-                        | Ok value -> acc.[i] <- value; Ok acc)
+
+                if error.IsNone then
+                    Ok (unbox arr)
+                else
+                    Error error.Value
             else
                 (path, BadPrimitive ("an array", value))
                 |> Error
@@ -416,8 +428,7 @@ module Decode =
                 match decoders with
                 | head::tail ->
                     match fromValue path head value with
-                    | Ok v ->
-                        Ok v
+                    | Ok _ as ok -> unbox ok
                     | Error error -> runner tail (errors @ [error])
                 | [] -> (path, BadOneOf errors) |> Error
 
@@ -447,7 +458,7 @@ module Decode =
     let andThen (cb: 'a -> Decoder<'b>) (decoder : Decoder<'a>) : Decoder<'b> =
         fun path value ->
             match decoder path value with
-            | Error error -> Error error
+            | Error _ as error-> unbox error
             | Ok result -> cb result path value
 
     /////////////////////
@@ -807,27 +818,43 @@ module Decode =
         if not (Helpers.isObject value) then
             (path, BadPrimitive ("an object", value)) |> Error
         else
-            (decoderInfos, Ok []) ||> Array.foldBack (fun (name, decoder) acc ->
-                match acc with
-                | Error _ -> acc
-                | Ok result ->
-                    field name decoder path value
-                    |> Result.map (fun v -> v::result))
+            let mutable i = 0
+            let mutable result = ResizeArray<obj>()
+            let mutable error: DecoderError option = None
+            while i < decoderInfos.Length && error.IsNone do
+                let (name, decoder) = decoderInfos.[i]
+                match field name decoder path value with
+                | Ok v -> result.Add(box v)
+                | Error err -> error <- Some err
+                i <- i + 1
+
+            if error.IsNone then
+                Ok (unbox<obj[]> result)
+            else
+                Error error.Value
 
     let private autoObject2 (keyDecoder: BoxedDecoder) (valueDecoder: BoxedDecoder) (path : string) (value: JsonValue) =
         if not (Helpers.isObject value) then
             (path, BadPrimitive ("an object", value)) |> Error
         else
-            (Ok [], Helpers.objectKeys(value)) ||> Seq.fold (fun acc name ->
-                match acc with
-                | Error _ -> acc
-                | Ok acc ->
-                    match keyDecoder path name with
-                    | Error er -> Error er
-                    | Ok k ->
-                        match field name valueDecoder path value with
-                        | Error er -> Error er
-                        | Ok v -> (k,v)::acc |> Ok)
+            let keys = Helpers.objectKeys(value) |> Array.ofSeq
+            let mutable i = 0
+            let mutable result = ResizeArray<obj*obj>()
+            let mutable error: DecoderError option = None
+            while i < keys.Length && error.IsNone do
+                let name = keys.[i]
+                match keyDecoder path name with
+                | Error er -> error <- Some er
+                | Ok k ->
+                    match field name valueDecoder path value with
+                    | Error er -> error <- Some er
+                    | Ok v -> result.Add((k,v))
+                i <- i + 1
+
+            if error.IsNone then
+                Ok (unbox<(obj*obj)[]> result)
+            else
+                Error error.Value
 
     let private mixedArray msg (decoders: BoxedDecoder[]) (path: string) (values: JsonValue[]): Result<JsonValue list, DecoderError> =
         if decoders.Length <> values.Length then
@@ -865,7 +892,7 @@ module Decode =
                     name, autoDecoder extra isCamelCase false fi.PropertyType)
             fun path value ->
                 autoObject decoders path value
-                |> Result.map (fun xs -> FSharpValue.MakeRecord(t, List.toArray xs, allowAccessToPrivateRepresentation=true))
+                |> Result.map (fun xs -> FSharpValue.MakeRecord(t, unbox xs, allowAccessToPrivateRepresentation=true))
 
         elif FSharpType.IsUnion(t, allowAccessToPrivateRepresentation=true) then
             fun path (value: JsonValue) ->
@@ -910,11 +937,11 @@ module Decode =
                 elif fullname = typedefof<obj list>.FullName then
                     t.GenericTypeArguments.[0] |> (autoDecoder extra isCamelCase false) |> list |> boxDecoder
                 elif fullname = typedefof< Map<string, obj> >.FullName then
-                    let keyDecoder = t.GenericTypeArguments.[0] |> autoDecoder extra isCamelCase false
+                    let keyDecoder = stringUnsafe |> boxDecoder
                     let valueDecoder = t.GenericTypeArguments.[1] |> autoDecoder extra isCamelCase false
                     oneOf [
                         autoObject2 keyDecoder valueDecoder
-                        list (tuple2 keyDecoder valueDecoder)
+                        array (tuple2 keyDecoder valueDecoder)
                     ] |> map (fun ar -> toMap (unbox ar) |> box)
                 elif fullname = typedefof< Set<string> >.FullName then
                     let decoder = t.GenericTypeArguments.[0] |> autoDecoder extra isCamelCase false
