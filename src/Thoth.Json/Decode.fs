@@ -38,7 +38,8 @@ module Decode =
         [<Emit("isFinite($0) && !($0 % 1)")>]
         let isIntFinite (_: JsonValue) : bool = jsNative
 
-        let isUndefined (o: JsonValue): bool = jsTypeof o = "undefined"
+        [<Emit("$0 === undefined")>]
+        let isUndefined (o: JsonValue): bool = jsNative
 
         [<Emit("JSON.stringify($0, null, 4) + ''")>]
         let anyToString (_: JsonValue) : string = jsNative
@@ -856,16 +857,28 @@ module Decode =
             else
                 Error error.Value
 
-    let private mixedArray msg (decoders: BoxedDecoder[]) (path: string) (values: JsonValue[]): Result<JsonValue list, DecoderError> =
+    let private mixedArray msg (decoders: BoxedDecoder[]) (path: string) (values: JsonValue[]): Result<JsonValue [], DecoderError> =
         if decoders.Length <> values.Length then
             (path, sprintf "Expected %i %s but got %i" decoders.Length msg values.Length
             |> FailMessage) |> Error
         else
-            (values, decoders, Ok [])
-            |||> Array.foldBack2 (fun value decoder acc ->
-                match acc with
-                | Error _ -> acc
-                | Ok result -> decoder path value |> Result.map (fun v -> v::result))
+            let mutable i = 0
+            let result = Array.zeroCreate<JsonValue> values.Length
+            let mutable error: DecoderError option = None
+            while i < values.Length && error.IsNone do
+                let value = values.[i]
+                let decoder = decoders.[i]
+
+                match decoder path value with
+                | Ok value -> result.[i] <- value
+                | Error er -> error <- Some er
+
+                i <- i + 1
+
+            if error.IsNone then
+                Ok result
+            else
+                Error error.Value
 
     let rec private makeUnion extra isCamelCase t name (path : string) (values: JsonValue[]) =
         let uci =
@@ -879,7 +892,7 @@ module Decode =
             else
                 let decoders = uci.GetFields() |> Array.map (fun fi -> autoDecoder extra isCamelCase false fi.PropertyType)
                 mixedArray "union fields" decoders path values
-                |> Result.map (fun values -> FSharpValue.MakeUnion(uci, List.toArray values, allowAccessToPrivateRepresentation=true))
+                |> Result.map (fun values -> FSharpValue.MakeUnion(uci, values, allowAccessToPrivateRepresentation=true))
 
     and private autoDecodeRecordsAndUnions extra (isCamelCase : bool) (isOptional : bool) (t: System.Type) : BoxedDecoder =
         if FSharpType.IsRecord(t, allowAccessToPrivateRepresentation=true) then
@@ -928,7 +941,7 @@ module Decode =
                 fun path value ->
                     if Helpers.isArray value then
                         mixedArray "tuple elements" decoders path (Helpers.asArray value)
-                        |> Result.map (fun xs -> FSharpValue.MakeTuple(List.toArray xs, t))
+                        |> Result.map (fun xs -> FSharpValue.MakeTuple(xs, t))
                     else (path, BadPrimitive ("an array", value)) |> Error
             else
                 let fullname = t.GetGenericTypeDefinition().FullName
