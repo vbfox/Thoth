@@ -880,19 +880,21 @@ module Decode =
             else
                 Error error.Value
 
-    let rec private makeUnion extra isCamelCase t name (path : string) (values: JsonValue[]) =
-        let uci =
+    let rec private makeUnion extra isCamelCase t =
+        let unionCases =
             FSharpType.GetUnionCases(t, allowAccessToPrivateRepresentation=true)
-            |> Array.tryFind (fun x -> x.Name = name)
-        match uci with
-        | None -> (path, FailMessage("Cannot find case " + name + " in " + t.FullName)) |> Error
-        | Some uci ->
-            if values.Length = 0 then
-                FSharpValue.MakeUnion(uci, [||], allowAccessToPrivateRepresentation=true) |> Ok
-            else
-                let decoders = uci.GetFields() |> Array.map (fun fi -> autoDecoder extra isCamelCase false fi.PropertyType)
-                mixedArray "union fields" decoders path values
-                |> Result.map (fun values -> FSharpValue.MakeUnion(uci, values, allowAccessToPrivateRepresentation=true))
+            |> Array.map (fun uci -> uci, uci.GetFields() |> Array.map (fun fi -> autoDecoder extra isCamelCase false fi.PropertyType))
+
+        fun name (path : string) (values: JsonValue[]) ->
+            let unionCase = unionCases |> Array.tryFind (fun (x, _) -> x.Name = name)
+            match unionCase with
+            | None -> (path, FailMessage("Cannot find case " + name + " in " + t.FullName)) |> Error
+            | Some (uci, decoders) ->
+                if values.Length = 0 then
+                    FSharpValue.MakeUnion(uci, [||], allowAccessToPrivateRepresentation=true) |> Ok
+                else
+                    mixedArray "union fields" decoders path values
+                    |> Result.map (fun values -> FSharpValue.MakeUnion(uci, values, allowAccessToPrivateRepresentation=true))
 
     and private autoDecodeRecordsAndUnions extra (isCamelCase : bool) (isOptional : bool) (t: System.Type) : BoxedDecoder =
         if FSharpType.IsRecord(t, allowAccessToPrivateRepresentation=true) then
@@ -908,14 +910,15 @@ module Decode =
                 |> Result.map (fun xs -> FSharpValue.MakeRecord(t, unbox xs, allowAccessToPrivateRepresentation=true))
 
         elif FSharpType.IsUnion(t, allowAccessToPrivateRepresentation=true) then
+            let unionMaker = makeUnion extra isCamelCase t
             fun path (value: JsonValue) ->
                 if Helpers.isString(value) then
                     let name = Helpers.asString value
-                    makeUnion extra isCamelCase t name path [||]
+                    unionMaker name path [||]
                 elif Helpers.isArray(value) then
                     let values = Helpers.asArray value
                     let name = Helpers.asString values.[0]
-                    makeUnion extra isCamelCase t name path values.[1..]
+                    unionMaker name path values.[1..]
                 else (path, BadPrimitive("a string or array", value)) |> Error
 
         else
