@@ -293,17 +293,24 @@ module Decode =
     // Object primitives ///
     ///////////////////////
 
+    let inline fieldInner (fieldName: string) (decoder : Decoder<'value>) value =
+        let fieldValue = Helpers.getField fieldName value
+        match decoder fieldValue with
+        | Ok _ as ok -> ok
+        | Error er ->
+            if Helpers.isUndefined fieldValue then
+                Error("", BadField ("an object with a field named `" + fieldName + "`", value))
+            else
+                Error(er |> Helpers.prependPath ("." + fieldName))
+
+    let private fieldUnsafe (fieldName: string) (decoder : Decoder<'value>) : Decoder<'value> =
+        fun value ->
+            fieldInner fieldName decoder value
+
     let field (fieldName: string) (decoder : Decoder<'value>) : Decoder<'value> =
         fun value ->
             if Helpers.isObject value then
-                let fieldValue = Helpers.getField fieldName value
-                match decoder fieldValue with
-                | Ok _ as ok -> ok
-                | Error er ->
-                    if Helpers.isUndefined fieldValue then
-                        Error("", BadField ("an object with a field named `" + fieldName + "`", value))
-                    else
-                        Error(er |> Helpers.prependPath ("." + fieldName))
+                fieldInner fieldName decoder value
             else
                 Error("", BadType("an object", value))
 
@@ -394,17 +401,17 @@ module Decode =
                 ("", BadPrimitive ("a list", value))
                 |> Error
 
-    let array (decoder : Decoder<'value>) : Decoder<'value array> =
+    let array (decoder : Decoder<'value>) : Decoder<'value []> =
         fun value ->
             if Helpers.isArray value then
                 let mutable i = 0
                 let tokens = Helpers.asArray value
-                let arr = ResizeArray<'value>()
+                let arr = Array.zeroCreate tokens.Length
                 let mutable error: DecoderError option = None
                 while i < tokens.Length && error.IsNone do
                     let value = tokens.[i]
                     match decoder value with
-                    | Ok value -> arr.Add(value)
+                    | Ok value -> arr.[i] <- value
                     | Error er -> error <- Some (er |> Helpers.prependPath (".[" + (i.ToString()) + "]"))
                     i <- i + 1
 
@@ -836,7 +843,7 @@ module Decode =
             let mutable error: DecoderError option = None
             while i < decoderInfos.Length && error.IsNone do
                 let (name, decoder) = decoderInfos.[i]
-                match field name decoder value with
+                match fieldUnsafe name decoder value with
                 | Ok v -> result.[i] <- box v
                 | Error err -> error <- Some err
                 i <- i + 1
@@ -852,20 +859,20 @@ module Decode =
         else
             let keys = Helpers.objectKeys(value) |> Array.ofSeq
             let mutable i = 0
-            let mutable result = ResizeArray<obj*obj>()
+            let mutable result = Array.zeroCreate<obj*obj> keys.Length
             let mutable error: DecoderError option = None
             while i < keys.Length && error.IsNone do
                 let name = keys.[i]
                 match keyDecoder name with
                 | Error er -> error <- Some er
                 | Ok k ->
-                    match field name valueDecoder value with
+                    match fieldUnsafe name valueDecoder value with
                     | Error er -> error <- Some er
-                    | Ok v -> result.Add((k,v))
+                    | Ok v -> result.[i] <- (k,v)
                 i <- i + 1
 
             if error.IsNone then
-                Ok (unbox<(obj*obj)[]> result)
+                Ok result
             else
                 Error error.Value
 
@@ -967,10 +974,16 @@ module Decode =
                 elif fullname = typedefof< Map<string, obj> >.FullName then
                     let keyDecoder = stringUnsafe |> boxDecoder
                     let valueDecoder = t.GenericTypeArguments.[1] |> autoDecoder extra isCamelCase false
-                    oneOf [
-                        autoObject2 keyDecoder valueDecoder
-                        array (tuple2 keyDecoder valueDecoder)
-                    ] |> map (fun ar -> toMap (unbox ar) |> box)
+                    fun value ->
+                        if Helpers.isObject value then
+                            autoObject2 keyDecoder valueDecoder value
+                            |> Result.map (fun ar -> ar |> unbox |> toMap |> box)
+                        else if Helpers.isArray value then
+                            array (tuple2 keyDecoder valueDecoder) value
+                            |> Result.map (fun ar -> ar |> unbox |> toMap |> box)
+                        else
+                            ("", BadPrimitive ("an object or an array", value))
+                            |> Error
                 elif fullname = typedefof< Set<string> >.FullName then
                     let decoder = t.GenericTypeArguments.[0] |> autoDecoder extra isCamelCase false
                     fun value ->
