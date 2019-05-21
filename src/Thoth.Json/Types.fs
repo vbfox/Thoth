@@ -14,7 +14,7 @@ type ErrorReason =
 
 type DecoderError = string * ErrorReason
 
-type Decoder<'T> = string -> JsonValue -> Result<'T, DecoderError>
+type Decoder<'T> = JsonValue -> Result<'T, DecoderError>
 
 type Encoder<'T> = 'T -> JsonValue
 
