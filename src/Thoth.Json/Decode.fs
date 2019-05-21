@@ -832,17 +832,17 @@ module Decode =
             ("", BadPrimitive ("an object", value)) |> Error
         else
             let mutable i = 0
-            let mutable result = ResizeArray<obj>()
+            let mutable result = Array.zeroCreate<obj> decoderInfos.Length
             let mutable error: DecoderError option = None
             while i < decoderInfos.Length && error.IsNone do
                 let (name, decoder) = decoderInfos.[i]
                 match field name decoder value with
-                | Ok v -> result.Add(box v)
+                | Ok v -> result.[i] <- box v
                 | Error err -> error <- Some err
                 i <- i + 1
 
             if error.IsNone then
-                Ok (unbox<obj[]> result)
+                Ok result
             else
                 Error error.Value
 
