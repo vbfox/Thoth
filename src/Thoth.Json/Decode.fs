@@ -16,6 +16,9 @@ module Decode =
         [<Emit("$0 instanceof SyntaxError")>]
         let isSyntaxError (_ : JsonValue) : bool = jsNative
 
+        [<Emit("new Array($0)")>]
+        let createEmptyArray<'t>(count: int): 't[] = jsNative
+
         let inline getField (fieldName: string) (o: JsonValue) = o?(fieldName)
         let inline isString (o: JsonValue) : bool = o :? string
 
@@ -820,7 +823,7 @@ module Decode =
             (path, BadPrimitive ("an object", value)) |> Error
         else
             let mutable i = 0
-            let mutable result = Array.zeroCreate<obj> decoderInfos.Length
+            let mutable result = Helpers.createEmptyArray<obj> decoderInfos.Length
             let mutable error: DecoderError option = None
             while i < decoderInfos.Length && error.IsNone do
                 let (name, decoder) = decoderInfos.[i]
@@ -840,7 +843,7 @@ module Decode =
         else
             let keys = Helpers.objectKeys(value)
             let mutable i = 0
-            let mutable result = Array.zeroCreate<obj*obj> keys.Count
+            let mutable result = Helpers.createEmptyArray<obj*obj> keys.Count
             let mutable error: DecoderError option = None
             while i < keys.Count && error.IsNone do
                 let name = keys.[i]
@@ -863,7 +866,7 @@ module Decode =
             |> FailMessage) |> Error
         else
             let mutable i = 0
-            let result = Array.zeroCreate<JsonValue> values.Length
+            let result = Helpers.createEmptyArray<JsonValue> values.Length
             let mutable error: DecoderError option = None
             while i < values.Length && error.IsNone do
                 let value = values.[i]
