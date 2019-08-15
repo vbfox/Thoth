@@ -910,8 +910,11 @@ module Decode =
                         else fi.Name
                     name, autoDecoder extra isCamelCase false fi.PropertyType)
             fun path value ->
-                autoObject decoders path value
-                |> Result.map (fun xs -> FSharpValue.MakeRecord(t, unbox xs, allowAccessToPrivateRepresentation=true))
+                match autoObject decoders path value with
+                | Ok xs ->
+                    FSharpValue.MakeRecord(t, unbox xs, allowAccessToPrivateRepresentation=true)
+                    |> Ok
+                | Error err -> Error err
 
         elif FSharpType.IsUnion(t, allowAccessToPrivateRepresentation=true) then
             let unionMaker = makeUnion extra isCamelCase t
