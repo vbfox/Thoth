@@ -370,9 +370,10 @@ module Decode =
                 let mutable i = tokens.Length - 1
                 let mutable result = []
                 let mutable error: DecoderError option = None
+                let pathPrefix = path + ".["
                 while i > 0 && error.IsNone do
                     let value = tokens.[i]
-                    match decoder (path + ".[" + (i.ToString()) + "]") value with
+                    match decoder (pathPrefix + (i.ToString()) + "]") value with
                     | Ok value -> result <- value::result
                     | Error er -> error <- Some er
                     i <- i - 1
@@ -819,22 +820,21 @@ module Decode =
     let private toMap<'key, 'value when 'key: comparison> (xs: ('key*'value) seq) = Map.ofSeq xs
     let private toSet<'key when 'key: comparison> (xs: 'key seq) = Set.ofSeq xs
 
-    let private autoObject (decoderInfos: (string * BoxedDecoder)[]) (path : string) (value: JsonValue) =
+    let private autoObject (decoderInfos: (string * BoxedDecoder)[]) (resultBuffer: obj[]) (path : string) (value: JsonValue) =
         if not (Helpers.isObject value) then
             (path, BadPrimitive ("an object", value)) |> Error
         else
             let mutable i = 0
-            let mutable result = Helpers.createEmptyArray<obj> decoderInfos.Length
             let mutable error: DecoderError option = None
             while i < decoderInfos.Length && error.IsNone do
                 let (name, decoder) = decoderInfos.[i]
                 match field name decoder path value with
-                | Ok v -> result.[i] <- box v
+                | Ok v -> resultBuffer.[i] <- box v
                 | Error err -> error <- Some err
                 i <- i + 1
 
             if error.IsNone then
-                Ok result
+                Ok resultBuffer
             else
                 Error error.Value
 
@@ -909,8 +909,9 @@ module Decode =
                         if isCamelCase then fi.Name.[..0].ToLowerInvariant() + fi.Name.[1..]
                         else fi.Name
                     name, autoDecoder extra isCamelCase false fi.PropertyType)
+            let buffer = Helpers.createEmptyArray<obj> decoders.Length
             fun path value ->
-                match autoObject decoders path value with
+                match autoObject decoders buffer path value with
                 | Ok xs ->
                     FSharpValue.MakeRecord(t, unbox xs, allowAccessToPrivateRepresentation=true)
                     |> Ok
