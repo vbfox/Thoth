@@ -46,7 +46,7 @@ module Decode =
 
         let inline isFunction (o: JsonValue) : bool = jsTypeof o = "function"
 
-        let inline objectKeys (o: JsonValue) : string seq = upcast JS.Object.keys(o)
+        let inline objectKeys (o: JsonValue) : ResizeArray<string> = JS.Object.keys(o)
         let inline asBool (o: JsonValue): bool = unbox o
         let inline asInt (o: JsonValue): int = unbox o
         let inline asFloat (o: JsonValue): float = unbox o
@@ -820,17 +820,17 @@ module Decode =
             (path, BadPrimitive ("an object", value)) |> Error
         else
             let mutable i = 0
-            let mutable result = ResizeArray<obj>()
+            let mutable result = Array.zeroCreate<obj> decoderInfos.Length
             let mutable error: DecoderError option = None
             while i < decoderInfos.Length && error.IsNone do
                 let (name, decoder) = decoderInfos.[i]
                 match field name decoder path value with
-                | Ok v -> result.Add(box v)
+                | Ok v -> result.[i] <- box v
                 | Error err -> error <- Some err
                 i <- i + 1
 
             if error.IsNone then
-                Ok (unbox<obj[]> result)
+                Ok result
             else
                 Error error.Value
 
@@ -838,22 +838,22 @@ module Decode =
         if not (Helpers.isObject value) then
             (path, BadPrimitive ("an object", value)) |> Error
         else
-            let keys = Helpers.objectKeys(value) |> Array.ofSeq
+            let keys = Helpers.objectKeys(value)
             let mutable i = 0
-            let mutable result = ResizeArray<obj*obj>()
+            let mutable result = Array.zeroCreate<obj*obj> keys.Count
             let mutable error: DecoderError option = None
-            while i < keys.Length && error.IsNone do
+            while i < keys.Count && error.IsNone do
                 let name = keys.[i]
                 match keyDecoder path name with
                 | Error er -> error <- Some er
                 | Ok k ->
                     match field name valueDecoder path value with
                     | Error er -> error <- Some er
-                    | Ok v -> result.Add((k,v))
+                    | Ok v -> result.[i] <- (k,v)
                 i <- i + 1
 
             if error.IsNone then
-                Ok (unbox<(obj*obj)[]> result)
+                Ok result
             else
                 Error error.Value
 
