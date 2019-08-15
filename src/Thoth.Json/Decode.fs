@@ -390,12 +390,13 @@ module Decode =
             if Helpers.isArray value then
                 let mutable i = 0
                 let tokens = Helpers.asArray value
-                let arr = ResizeArray<'value>()
+                let arr = Helpers.createEmptyArray<'value> tokens.Length
                 let mutable error: DecoderError option = None
+                let pathPrefix = path + ".["
                 while i < tokens.Length && error.IsNone do
                     let value = tokens.[i]
-                    match decoder (path + ".[" + (i.ToString()) + "]") value with
-                    | Ok value -> arr.Add(value)
+                    match decoder (pathPrefix + (i.ToString()) + "]") value with
+                    | Ok value -> arr.[i] <- value
                     | Error er -> error <- Some er
                     i <- i + 1
 
