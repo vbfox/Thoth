@@ -412,14 +412,21 @@ module Decode =
     let keyValuePairs (decoder : Decoder<'value>) : Decoder<(string * 'value) list> =
         fun path value ->
             if Helpers.isObject value then
-                (Ok [], Helpers.objectKeys value) ||> Seq.fold (fun acc prop ->
-                    match acc with
-                    | Error _ -> acc
-                    | Ok acc ->
-                        match Helpers.getField prop value |> decoder path with
-                        | Error er -> Error er
-                        | Ok value -> (prop, value)::acc |> Ok)
-                |> Result.map List.rev
+                let mutable i = 0
+                let keys = Helpers.objectKeys value
+                let mutable error: DecoderError option = None
+                let mutable result = []
+                while i < keys.Count && error.IsNone do
+                    let key = keys.[i]
+                    match Helpers.getField key value |> decoder path with
+                    | Error er -> error <- Some er
+                    | Ok value -> result <- (key, value)::result
+                    i <- i + 1
+
+                if error.IsNone then
+                    Ok (List.rev result)
+                else
+                    Error error.Value
             else
                 (path, BadPrimitive ("an object", value))
                 |> Error
@@ -592,7 +599,26 @@ module Decode =
             | _,_,_,_,_,_,_,Error er -> Error er
 
     let dict (decoder : Decoder<'value>) : Decoder<Map<string, 'value>> =
-        map Map.ofList (keyValuePairs decoder)
+        fun path value ->
+            if Helpers.isObject value then
+                let mutable i = 0
+                let keys = Helpers.objectKeys value
+                let mutable error: DecoderError option = None
+                let mutable result = Map.empty
+                while i < keys.Count && error.IsNone do
+                    let key = keys.[i]
+                    match Helpers.getField key value |> decoder path with
+                    | Error er -> error <- Some er
+                    | Ok value -> result <- result |> Map.add key value
+                    i <- i + 1
+
+                if error.IsNone then
+                    Ok result
+                else
+                    Error error.Value
+            else
+                (path, BadPrimitive ("an object", value))
+                |> Error
 
     //////////////////////
     // Object builder ///
