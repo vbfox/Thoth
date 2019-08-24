@@ -286,16 +286,19 @@ module Decode =
     // Object primitives ///
     ///////////////////////
 
+    let inline private fieldCore (fieldName: string) (decoder : Decoder<'value>) path value =
+        let fieldValue = Helpers.getField fieldName value
+        match decoder (path + "." + fieldName) fieldValue with
+        | Ok _ as ok -> ok
+        | Error _ as er ->
+            if Helpers.isUndefined fieldValue then
+                Error(path, BadField ("an object with a field named `" + fieldName + "`", value))
+            else er
+
     let field (fieldName: string) (decoder : Decoder<'value>) : Decoder<'value> =
         fun path value ->
             if Helpers.isObject value then
-                let fieldValue = Helpers.getField fieldName value
-                match decoder (path + "." + fieldName) fieldValue with
-                | Ok _ as ok -> ok
-                | Error _ as er ->
-                    if Helpers.isUndefined fieldValue then
-                        Error(path, BadField ("an object with a field named `" + fieldName + "`", value))
-                    else er
+                fieldCore fieldName decoder path value
             else
                 Error(path, BadType("an object", value))
 
@@ -854,7 +857,7 @@ module Decode =
             let mutable error: DecoderError option = None
             while i < decoderInfos.Length && error.IsNone do
                 let (name, decoder) = decoderInfos.[i]
-                match field name decoder path value with
+                match fieldCore name decoder path value with
                 | Ok v -> resultBuffer.[i] <- box v
                 | Error err -> error <- Some err
                 i <- i + 1
@@ -877,7 +880,7 @@ module Decode =
                 match keyDecoder path name with
                 | Error er -> error <- Some er
                 | Ok k ->
-                    match field name valueDecoder path value with
+                    match fieldCore name valueDecoder path value with
                     | Error er -> error <- Some er
                     | Ok v -> result.[i] <- (k,v)
                 i <- i + 1
