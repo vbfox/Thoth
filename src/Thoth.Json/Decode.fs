@@ -374,7 +374,7 @@ module Decode =
                 let mutable result = []
                 let mutable error: DecoderError option = None
                 let pathPrefix = path + ".["
-                while i > 0 && error.IsNone do
+                while i >= 0 && error.IsNone do
                     let value = tokens.[i]
                     match decoder (pathPrefix + (i.ToString()) + "]") value with
                     | Ok value -> result <- value::result
